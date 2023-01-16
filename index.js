@@ -9,6 +9,7 @@ import morgan from 'morgan'
 
 import authRoutes from './routes/auth.js'
 import userRoutes from './routes/user.js'
+import { errorHandler } from './middleware/error.js'
 
 import User from './models/User.js'
 import {users} from './data/index.js'
@@ -26,8 +27,10 @@ app.use(cors())
 app.use('/static', express.static('static'))
 
 /* ROUTES */
-app.use('/auth', authRoutes)
-app.use('/users', userRoutes)
+app.use('/api/auth', authRoutes)
+app.use('/api/users', userRoutes)
+
+app.use(errorHandler)
 
 /* MONGO */ 
 const PORT = process.env.PORT
@@ -41,3 +44,13 @@ mongoose.connect(process.env.MONGO_URL, {
   // User.insertMany(users)
   // Post.insertMany(posts)
 }).catch((err) => console.log(`${err} did not connect`))
+
+
+// Unhandled promise rejection
+process.on('unhandledRejection', (err) => {
+  console.log(`Shutting down server for ${err.message}`)
+  console.log(`Shutting down the server due to unhandeled promise rejection`)
+  app.close(() => {
+    process.exit(1)
+  })
+})
