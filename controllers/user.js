@@ -1,126 +1,242 @@
-import bcrypt from 'bcrypt'
 import User from "../models/User.js";
-import ErrorHandler from '../utils/errorHandler.js';
-import {catchAsyncErrors} from '../middleware/asyncError.js'
+import ErrorHandler from "../utils/errorHandler.js";
+import { catchAsyncErrors } from "../middleware/asyncError.js";
+import { sendToken } from "../utils/jwtToken.js";
+import { sendMail } from "../utils/sendMail.js";
+import crypto from "crypto";
 
-/** GET http://localhost:5001/api/users/example123 */
-export const getUser = catchAsyncErrors( async(req, res, next) => {
-  // try {
-    const user = await User.findById(req.params.id)
-    if(!user){
-      return next(new ErrorHandler('User not found', 404))
-    }
-    const {password, ...others} = user._doc
-    res.status(200).json(others)
-  // } catch (err) {
-  //   res.send(404).json({error: err.message})
-  // } 
-})
+export const createUser = catchAsyncErrors(async (req, res, next) => {
+  const { username, email, password, firstName, lastName } = req.body;
 
-/** GET http://localhost:5001/users */
-export const getAllUsers = catchAsyncErrors(async(req, res) => {
-    const users = await User.find()  
-    res.status(200).json(users)
-})
+  const user = await User.create({
+    username,
+    email,
+    password,
+    firstName,
+    lastName,
+  });
 
-/** GET http://localhost:5001/users */
-export const deleteUser = catchAsyncErrors(async(req, res, next) => {
-  // try {
-    const {id} = req.params
-    const user = await User.findById(id)
-    if(!user){
-      return next(new ErrorHandler('User not found', 404))
-    }
-    const deletedUser = await User.findByIdAndDelete(id)  
-    res.status(200).json(deletedUser)
-})
+  sendToken(user, 201, res);
+});
 
-/** PUT http://localhost:5001/api/users/123455
- * @param : {
-      "id": "<user_id>"
-    }
-    body: 
-   {
-    "userid": "1234567",
-    "username": "example123",
-    "firstName": "bob",
-    "lastName": "robert",
+// Login
+export const loginUser = catchAsyncErrors(async (req, res, next) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return next(new ErrorHandler("Please enter your email & password", 400));
   }
- */
-  export const updateUser = catchAsyncErrors( async(req, res) => {
-    const {id} = req.params
 
-    if(req.user._id == id || req.user.role == "admin" || req.user.role == 'superuser'){
-        const updatedUser = await User.findByIdAndUpdate(
-          id,
-          {$set: req.body},
-          {new: true}
-        )
-        const user = await User.findById(id)
-        const {password, ...rest} = user._doc
-        res.status(200).json(rest)
-    }
-  })
+  const user = await User.findOne({ email }).select("+password");
 
-  /** PATCH http://localhost:5001/api/users/123455/block
- * @param : {
-      "id": "<user_id>"
-    }
-    body: 
-   {
-    "userid": "1234567",
-    "username": "example123",
-    "firstName": "bob",
-    "lastName": "robert",
+  if (!user) {
+    return next(new ErrorHandler("Invails email or password", 401));
   }
- */
-  export const blockUser = catchAsyncErrors(async(req, res) => {
-    
-    const { id } = req.params
-    const user = await User.findById(id)
-    if(!user){
-      return next(new ErrorHandler('User not found', 404))
-    }
 
-    // try {
-      const updatedUser = await User.findByIdAndUpdate(
-        id,
-        {$set: {isBlocked: true}},
-        {new: true}
-      )
-      // const user = await User.findById(id) 
-      const {password, ...rest} = user._doc
-      res.status(200).json(rest)
-    // } catch (err) {
-    //   res.status(500).json({error: err}) 
-    // }
-  })
+  const isPasswordMatched = await user.comparePassword(password);
 
-/** PATCH http://localhost:5001/api/users/123455/unblock
- * @param : {
-      "id": "<user_id>"
-    }
-    body: 
-   {
-    "userid": "1234567",
-    "username": "example123",
-    "firstName": "bob",
-    "lastName": "robert",
+  if (!isPasswordMatched) {
+    return next(new ErrorHandler("Invails email or password", 401));
   }
- */
-  export const unblockUser = async(req, res) => {
-    
-    const { id } = req.params
-    try {
-      const updatedUser = await User.findByIdAndUpdate(
-        id,
-        {$set: {isBlocked: false}},
-        {new: true}
-      )
-      const user = await User.findById(id) 
-      const {password, ...rest} = user._doc
-      res.status(200).json(rest)
-    } catch (err) {
-      res.status(500).json({error: err}) 
-    }
+
+  sendToken(user, 200, res);
+});
+
+// logout
+export const logoutUser = catchAsyncErrors(async (req, res, next) => {
+  res.cookie("token", null, {
+    expires: new Date(Date.now()),
+    httpOnly: true,
+  });
+
+  res.status(200).json({ success: true, message: "Logout success" });
+});
+
+// forgot password
+export const forgotPassword = catchAsyncErrors(async (req, res, next) => {
+  const user = await User.findOne({ email: req.body.email });
+
+  if (!user) {
+    return next(new ErrorHandler("User not found", 404));
   }
+
+  // get reset token
+  const resetToken = user.getResetToken();
+
+  await user.save();
+
+  const resetPasswordUrl = `${req.protocol}://${req.get(
+    "host"
+  )}/api/password/reset/${resetToken}`;
+
+  const message = `Your password reset token is :- \n \n ${resetPasswordUrl}`;
+
+  try {
+    await sendMail({
+      email: user.email,
+      subject: "App Password Recovery",
+      message,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Email sent to ${user.email} successfully`,
+    });
+  } catch (error) {
+    user.resetPasswordToken = undefined;
+    user.resetPasswordTime = undefined;
+    await user.save();
+    return next(new ErrorHandler(error.message));
+  }
+});
+
+export const resetPassword = catchAsyncErrors(async (req, res, next) => {
+  // create token hash
+  const resetPasswordToken = crypto
+    .createHash("sha256")
+    .update(req.params.token)
+    .digest("hex");
+
+  const user = await User.findOne({
+    resetPasswordToken,
+    resetPasswordTime: { $gt: Date.now() },
+  });
+
+  if (!user) {
+    return next(
+      new ErrorHandler("Reset password url is invalid or expired", 400)
+    );
+  }
+
+  const { password, confirmPassword } = req.body;
+
+  if (password !== confirmPassword) {
+    return next(new ErrorHandler("Passwords did not match", 400));
+  }
+
+  user.password = password;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordTime = undefined;
+
+  await user.save();
+
+  sendToken(user, 200, res);
+});
+
+// Get profile details
+export const userDetails = catchAsyncErrors(async (req, res, next) => {
+  const user = await User.findById(req.user.id);
+  res.status(200).json({
+    success: true,
+    user,
+  });
+});
+
+export const updatePassword = catchAsyncErrors(async (req, res, next) => {
+  const { oldPassword, newPassword, confirmPassword } = req.body;
+  const user = await User.findById(req.user.id).select("+password");
+
+  if (!user) {
+    return next(new ErrorHandler("User not found", 401));
+  }
+
+  const isPasswordMatched = await user.comparePassword(oldPassword);
+
+  if (!isPasswordMatched) {
+    return next(new ErrorHandler("Old password is invalid", 401));
+  }
+
+  if (newPassword !== confirmPassword) {
+    return next(new ErrorHandler("Passwords did not match", 401));
+  }
+
+  user.password = newPassword;
+
+  await user.save();
+
+  sendToken(user, 200, res);
+});
+
+// Update profile
+export const updateProfile = catchAsyncErrors(async (req, res, next) => {
+  const { id } = req.params;
+  const { firstName, lastName, location } = req.body;
+  const user = await User.findById(id);
+
+  if (!user) {
+    return next(new ErrorHandler("User not found", 404));
+  }
+
+  const newUserData = { firstName, lastName, location };
+  // add cloudinary here
+  const updates = await User.findByIdAndUpdate(req.user.id, newUserData, {
+    new: true,
+    runValidators: true,
+    useFindAndModify: false,
+  });
+
+  res.status(200).json({
+    success: true,
+  });
+});
+
+// Get all users -- Admin
+export const getAllUsers = catchAsyncErrors(async (req, res, next) => {
+  const users = await User.find();
+  res.status(200).json({
+    success: true,
+    users,
+  });
+});
+
+// Get all users -- Admin
+export const getSingleUser = catchAsyncErrors(async (req, res, next) => {
+  const user = await User.findById(req.params.id);
+
+  if (!user) {
+    return next(new ErrorHandler("User not found", 404));
+  }
+
+  res.status(200).json({
+    success: true,
+    user,
+  });
+});
+
+// change user role
+export const updateUserRole = catchAsyncErrors(async (req, res, next) => {
+  const { id } = req.params;
+  const { role } = req.body;
+  const user = await User.findById(id);
+
+  if (!user) {
+    return next(new ErrorHandler("User not found", 404));
+  }
+
+  const newUserData = { role };
+
+  const updates = await User.findByIdAndUpdate(id, newUserData, {
+    new: true,
+    runValidators: true,
+    useFindAndModify: false,
+  });
+
+  res.status(200).json({
+    success: true,
+  });
+});
+
+// change user role
+export const deleteUser = catchAsyncErrors(async (req, res, next) => {
+  const { id } = req.params;
+  const user = await User.findById(id);
+
+  if (!user) {
+    return next(new ErrorHandler("User not found", 404));
+  }
+
+  await user.remove();
+
+  res.status(200).json({
+    success: true,
+  });
+});

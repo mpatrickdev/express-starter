@@ -1,22 +1,39 @@
 import { Router } from "express";
-import { deleteUser, getAllUsers, getUser, updateUser, unblockUser, blockUser } from "../controllers/user.js";
-// import { updateUser} from "../controllers/user.js";
-import {verifyToken, isAdmin } from '../middleware/auth.js'
+import { isAuthenticated, authorizeRoles } from "../middleware/auth.js";
+import {
+  createUser,
+  loginUser,
+  logoutUser,
+  forgotPassword,
+  resetPassword,
+  userDetails,
+  updatePassword,
+  updateProfile,
+  getAllUsers,
+  getSingleUser,
+  updateUserRole,
+  deleteUser,
+} from "../controllers/user.js";
 
-const router = Router()
+const router = Router();
 
-/* READ */
-router.get('/:id', verifyToken, getUser)
-router.get('/', verifyToken, isAdmin, getAllUsers)
-// router.get('/:id/friends', verifyToken, getUserFriends)
+router.route("/register").post(createUser);
+router.route("/login").post(loginUser);
+router.route("/password/forgot").post(forgotPassword);
 
-/* UPDATE */
-router.put('/:id', verifyToken, updateUser)
+router.route("/me").get(isAuthenticated, userDetails);
+router
+  .route("/admin/users")
+  .get(isAuthenticated, authorizeRoles("admin"), getAllUsers);
+router
+  .route("/admin/users/:id")
+  .get(isAuthenticated, authorizeRoles("admin"), updateProfile)
+  .put(isAuthenticated, authorizeRoles("admin"), updateUserRole)
+  .delete(isAuthenticated, authorizeRoles("admin"), deleteUser);
+router.route("/logout").get(logoutUser);
 
-/* PATCH */
-router.patch('/:id/block', verifyToken, isAdmin, blockUser)
-router.patch('/:id/unblock', verifyToken, isAdmin, unblockUser)
-
-/* DELETE */
-router.delete('/:id', verifyToken, isAdmin, deleteUser)
-export default router
+router.route("/password/reset/:token").put(resetPassword);
+router.route("/me/update/profile").put(isAuthenticated, updateProfile);
+router.route("/me/update/password").put(isAuthenticated, updatePassword);
+// router.route('/admin/users/:id').get(isAuthenticated, authorizeRoles('admin'), updateUserRole)
+export default router;
